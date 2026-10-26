@@ -51,6 +51,9 @@ def init_db():
     c.execute(
         "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion) VALUES (1, 'Cuenta Principal', 100.0, 100.0, 5.0, 3.0)"
     )
+    c.execute(
+        "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion) VALUES (2, 'Cuenta Secundaria', 50.0, 50.0, 5.0, 3.0)"
+    )
     conn.commit()
     conn.close()
 
@@ -79,8 +82,8 @@ with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
     with st.form("form_nueva_cuenta"):
         nuevo_nombre = st.text_input("Nombre de la cuenta")
         saldo_base_nueva = st.number_input("Saldo Inicial ($)", value=50.0, step=5.0)
-        meta_nueva = st.number_input("% Meta por Sesión ", value=5.0, step=0.5)
-        op_nueva = st.number_input("% Inversión por Operación ", value=3.0, step=0.5)
+        meta_nueva = st.number_input("% Meta por Sesión", value=5.0, step=0.5)
+        op_nueva = st.number_input("% Inversión por Operación", value=3.0, step=0.5)
         btn_crear_cuenta = st.form_submit_button("Crear Cuenta")
 
         if btn_crear_cuenta and nuevo_nombre:
