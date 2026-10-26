@@ -253,7 +253,7 @@ with tab2:
             df_sesiones["ganadas"].sum() + df_sesiones["perdidas"].sum()
         )
         total_itm = df_sesiones["ganadas"].sum()
-        winrate = (total_itm / total_trades * 100) if total_trades > 0 else 0
+        winrate = (total_itm / total_trades * 1000) if total_trades > 0 else 0
 
         m1, m2, m3 = st.columns(3)
         m1.metric("Sesiones Ejecutadas", len(df_sesiones))
@@ -280,7 +280,7 @@ with tab3:
     capital_proyectado = saldo_actual
     for i in range(1, num_sesiones_proyeccion + 1):
         saldo_inicial_s = capital_proyectado
-        meta_s = saldo_inicial_s * (pct_meta / 1000.0)
+        meta_s = saldo_inicial_s * (pct_meta / 100.0)
         saldo_final_s = saldo_inicial_s + meta_s
         datos_proyeccion.append(
             {
