@@ -27,7 +27,8 @@ def init_db():
             saldo_inicial REAL,
             saldo_actual REAL,
             pct_meta REAL,
-            pct_operacion REAL
+            pct_operacion REAL,
+            limite_ops INTEGER DEFAULT 3
         )
     """
     )
@@ -44,15 +45,31 @@ def init_db():
             perdidas INTEGER,
             resultado_monto REAL,
             saldo_final REAL,
+            estado_disciplina TEXT,
+            nota_emocional TEXT,
             FOREIGN KEY (cuenta_id) REFERENCES cuentas(id)
         )
     """
     )
+    # Migraciones seguras por si la tabla ya existía
+    try:
+        c.execute("ALTER TABLE cuentas ADD COLUMN limite_ops INTEGER DEFAULT 3")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute(
+            "ALTER TABLE sesiones ADD COLUMN estado_disciplina TEXT DEFAULT 'Plan Respetado'"
+        )
+        c.execute(
+            "ALTER TABLE sesiones ADD COLUMN nota_emocional TEXT DEFAULT ''"
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    # Dejar solo una cuenta por defecto con límite de 3 operaciones
     c.execute(
-        "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion) VALUES (1, 'Cuenta Principal', 100.0, 100.0, 5.0, 3.0)"
-    )
-    c.execute(
-        "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion) VALUES (2, 'Cuenta Secundaria', 50.0, 50.0, 5.0, 3.0)"
+        "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion, limite_ops) VALUES (1, 'Cuenta Principal', 10.0, 10.0, 5.0, 3.0, 3)"
     )
     conn.commit()
     conn.close()
@@ -77,13 +94,22 @@ cuenta_id = int(cuenta_info["id"])
 saldo_actual = float(cuenta_info["saldo_actual"])
 pct_meta = float(cuenta_info["pct_meta"])
 pct_operacion = float(cuenta_info["pct_operacion"])
+limite_ops_actual = int(
+    cuenta_info["limite_ops"] if "limite_ops" in cuenta_info else 3
+)
 
 with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
     with st.form("form_nueva_cuenta"):
         nuevo_nombre = st.text_input("Nombre de la cuenta")
-        saldo_base_nueva = st.number_input("Saldo Inicial ($)", value=50.0, step=5.0)
+        saldo_base_nueva = st.number_input("Saldo Inicial ($)", value=10.0, step=1.0)
         meta_nueva = st.number_input("% Meta por Sesión", value=5.0, step=0.5)
         op_nueva = st.number_input("% Inversión por Operación", value=3.0, step=0.5)
+        limite_nuevo = st.number_input(
+            "Límite Máx. de Operaciones por Sesión",
+            min_value=1,
+            value=3,
+            step=1,
+        )
         btn_crear_cuenta = st.form_submit_button("Crear Cuenta")
 
         if btn_crear_cuenta and nuevo_nombre:
@@ -91,8 +117,8 @@ with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
                 c = conn.cursor()
                 c.execute(
                     """
-                    INSERT INTO cuentas (nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO cuentas (nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion, limite_ops)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """,
                     (
                         nuevo_nombre,
@@ -100,6 +126,7 @@ with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
                         saldo_base_nueva,
                         meta_nueva,
                         op_nueva,
+                        limite_nuevo,
                     ),
                 )
                 conn.commit()
@@ -110,7 +137,7 @@ with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
 
 with st.sidebar.expander("✏️ Editar Cuenta Activa"):
     nuevo_saldo = st.number_input(
-        "Ajustar Saldo Actual ($)", value=saldo_actual, step=5.0
+        "Ajustar Saldo Actual ($)", value=saldo_actual, step=1.0
     )
     nuevo_pct_meta = st.number_input(
         "% Meta por Sesión", value=pct_meta, step=0.5
@@ -118,16 +145,28 @@ with st.sidebar.expander("✏️ Editar Cuenta Activa"):
     nuevo_pct_op = st.number_input(
         "% Inversión por Operación", value=pct_operacion, step=0.5
     )
+    nuevo_limite_ops = st.number_input(
+        "Límite Máx. de Operaciones",
+        min_value=1,
+        value=limite_ops_actual,
+        step=1,
+    )
 
     if st.button("Guardar Cambios de Cuenta"):
         c = conn.cursor()
         c.execute(
             """
             UPDATE cuentas 
-            SET saldo_actual = ?, pct_meta = ?, pct_operacion = ?
+            SET saldo_actual = ?, pct_meta = ?, pct_operacion = ?, limite_ops = ?
             WHERE id = ?
         """,
-            (nuevo_saldo, nuevo_pct_meta, nuevo_pct_op, cuenta_id),
+            (
+                nuevo_saldo,
+                nuevo_pct_meta,
+                nuevo_pct_op,
+                nuevo_limite_ops,
+                cuenta_id,
+            ),
         )
         conn.commit()
         st.sidebar.success("¡Parámetros actualizados!")
@@ -138,7 +177,11 @@ ganancia_meta_dolares = saldo_actual * (pct_meta / 100.0)
 saldo_meta_total = saldo_actual + ganancia_meta_dolares
 monto_por_op = saldo_actual * (pct_operacion / 100.0)
 
-st.subheader(f"📊 Panel Activo: {cuenta_seleccionada}")
+# Resaltar visualmente el nombre de la cuenta activa en la cabecera
+st.markdown(
+    f"### 📊 Panel Activo: <span style='color:#FF4B4B;'>{cuenta_seleccionada}</span>",
+    unsafe_allow_html=True,
+)
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Saldo Actual", f"${saldo_actual:.2f}")
@@ -148,12 +191,7 @@ col2.metric(
     delta=f"+${ganancia_meta_dolares:.2f}",
 )
 col3.metric(f"Inversión por Trade ({pct_operacion}%)", f"${monto_por_op:.2f}")
-
-df_sesiones_actual = pd.read_sql_query(
-    f"SELECT * FROM sesiones WHERE cuenta_id = {cuenta_id}", conn
-)
-sesiones_ganadas_total = len(df_sesiones_actual)
-col4.metric("Total Sesiones Registradas", sesiones_ganadas_total)
+col4.metric("Límite de Ops / Sesión", f"{limite_ops_actual} trades")
 
 st.divider()
 
@@ -168,9 +206,9 @@ tab1, tab2, tab3, tab4 = st.tabs(
 )
 
 with tab1:
-    st.subheader("Formulario de Cierre de Sesión")
+    st.subheader("Formulario de Cierre de Sesión y Control de Disciplina")
     st.info(
-        f"💡 Tienes un saldo de **${saldo_actual:.2f}**. Para cumplir tu meta del **{pct_meta}%**, tu objetivo es terminar la sesión con **${saldo_meta_total:.2f}** (ganancia neta de **+${ganancia_meta_dolares:.2f}**). Cada operativa sugerida es de **${monto_por_op:.2f}**."
+        f"💡 Saldo actual: **${saldo_actual:.2f}** | Meta del **{pct_meta}%**: **${saldo_meta_total:.2f}** (+${ganancia_meta_dolares:.2f}). Límite aconsejado: **{limite_ops_actual} operaciones**."
     )
 
     with st.form("form_sesion"):
@@ -189,20 +227,31 @@ with tab1:
         resultado_neto = st.number_input(
             "Ganancia / Pérdida Neta Final ($)",
             value=0.0,
-            step=1.0,
+            step=0.5,
             help="Coloca valor positivo si ganaste o negativo si quedaste en pérdida",
+        )
+
+        nota_emocional = st.text_input(
+            "📝 Nota Psicológica / Emocional (Ej. Sesión limpia, respeté el plan...)",
+            value="",
         )
 
         btn_guardar = st.form_submit_button("💾 Guardar Registro de Sesión")
 
     if btn_guardar:
+        total_ops_sesion = operaciones_ganadas + operaciones_perdidas
+        if total_ops_sesion <= limite_ops_actual:
+            estado_disc = "✅ Plan Respetado"
+        else:
+            estado_disc = "⚠️ Sobreoperativa"
+
         nuevo_saldo_final = saldo_actual + resultado_neto
         c = conn.cursor()
 
         c.execute(
             """
-            INSERT INTO sesiones (cuenta_id, fecha, saldo_inicial, meta_monto, monto_operacion, ganadas, perdidas, resultado_monto, saldo_final)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sesiones (cuenta_id, fecha, saldo_inicial, meta_monto, monto_operacion, ganadas, perdidas, resultado_monto, saldo_final, estado_disciplina, nota_emocional)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 cuenta_id,
@@ -214,6 +263,8 @@ with tab1:
                 operaciones_perdidas,
                 resultado_neto,
                 nuevo_saldo_final,
+                estado_disc,
+                nota_emocional,
             ),
         )
 
@@ -224,7 +275,7 @@ with tab1:
 
         conn.commit()
         st.success(
-            f"¡Sesión guardada con éxito! Nuevo saldo de la cuenta: ${nuevo_saldo_final:.2f}"
+            f"¡Sesión guardada! Estado: {estado_disc} | Nuevo saldo: ${nuevo_saldo_final:.2f}"
         )
         st.rerun()
 
@@ -260,22 +311,35 @@ with tab2:
         m2.metric("Total Operaciones", total_trades)
         m3.metric("Win Rate (Efectividad)", f"{winrate:.1f}%")
 
-        st.write("### Tabla de Registros")
-        st.dataframe(df_sesiones, use_container_width=True)
+        st.write("### Tabla de Historial y Disciplina")
+        st.dataframe(
+            df_sesiones[
+                [
+                    "fecha",
+                    "saldo_inicial",
+                    "ganadas",
+                    "perdidas",
+                    "resultado_monto",
+                    "saldo_final",
+                    "estado_disciplina",
+                    "nota_emocional",
+                ]
+            ],
+            use_container_width=True,
+        )
 
 with tab3:
     st.subheader(
         f"📈 Proyección Teórica de Interés Compuesto ({cuenta_seleccionada})"
     )
     st.info(
-        f"Esta tabla muestra cómo crecería tu capital actual (**${saldo_actual:.2f}**) sesión a sesión si cumples de manera perfecta la meta del **{pct_meta}%** por sesión."
+        f"Proyección sesión a sesión partiendo de tu capital actual (**${saldo_actual:.2f}**) cumpliendo la meta del **{pct_meta}%**."
     )
 
     num_sesiones_proyeccion = st.slider(
         "Número de sesiones a proyectar:", 10, 100, 30
     )
 
-    # Calcular la proyección matemática
     datos_proyeccion = []
     capital_proyectado = saldo_actual
     for i in range(1, num_sesiones_proyeccion + 1):
@@ -297,9 +361,7 @@ with tab3:
 
 with tab4:
     st.subheader("⚙️ Eliminar Registro Erróneo")
-    st.warning(
-        "⚠️ Si te equivocaste en una sesión, puedes seleccionarla y eliminarla aquí."
-    )
+    st.warning("⚠️ Selecciona y elimina cualquier sesión ingresada por error.")
 
     df_sesiones_borrar = pd.read_sql_query(
         f"SELECT id, fecha, saldo_inicial, resultado_monto, saldo_final FROM sesiones WHERE cuenta_id = {cuenta_id} ORDER BY id DESC",
