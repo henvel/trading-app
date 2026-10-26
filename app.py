@@ -49,10 +49,10 @@ def init_db():
     """
     )
     c.execute(
-        "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion) VALUES (1, 'Profe Velasquez', 100.0, 100.0, 5.0, 3.0)"
+        "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion) VALUES (1, 'Cuenta Principal', 100.0, 100.0, 5.0, 3.0)"
     )
     c.execute(
-        "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion) VALUES (2, 'Cuenta CBIT', 50.0, 50.0, 5.0, 3.0)"
+        "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion) VALUES (2, 'Cuenta Secundaria', 50.0, 50.0, 5.0, 3.0)"
     )
     conn.commit()
     conn.close()
@@ -80,7 +80,7 @@ pct_operacion = float(cuenta_info["pct_operacion"])
 
 with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
     with st.form("form_nueva_cuenta"):
-        nuevo_nombre = st.text_input("Nombre de la cuenta (ej. Cuenta IQ Option 3)")
+        nuevo_nombre = st.text_input("Nombre de la cuenta")
         saldo_base_nueva = st.number_input("Saldo Inicial ($)", value=50.0, step=5.0)
         meta_nueva = st.number_input("% Meta por Sesión", value=5.0, step=0.5)
         op_nueva = st.number_input("% Inversión por Operación", value=3.0, step=0.5)
@@ -106,7 +106,7 @@ with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
                 st.success(f"¡Cuenta '{nuevo_nombre}' creada con éxito!")
                 st.rerun()
             except Exception as e:
-                st.error("Ese nombre de cuenta ya existe. Usa otro.")
+                st.error("Ese nombre de cuenta ya existe.")
 
 with st.sidebar.expander("✏️ Editar Cuenta Activa"):
     nuevo_saldo = st.number_input(
@@ -157,8 +157,14 @@ col4.metric("Total Sesiones Registradas", sesiones_ganadas_total)
 
 st.divider()
 
-tab1, tab2 = st.tabs(
-    ["📝 Registrar Nueva Sesión", "📊 Historial y Estadísticas"]
+# --- PESTAÑAS DE NAVEGACIÓN ---
+tab1, tab2, tab3, tab4 = st.tabs(
+    [
+        "📝 Registrar Sesión",
+        "📊 Historial y Estadísticas",
+        "📈 Proyección de Interés Compuesto",
+        "⚙️ Gestionar / Borrar Registros",
+    ]
 )
 
 with tab1:
@@ -231,9 +237,7 @@ with tab2:
     )
 
     if df_sesiones.empty:
-        st.info(
-            "Aún no hay sesiones registradas para esta cuenta. Comienza guardando tu primera sesión en la pestaña superior."
-        )
+        st.info("Aún no hay sesiones registradas para esta cuenta.")
     else:
         fig_curva = px.line(
             df_sesiones,
@@ -257,20 +261,73 @@ with tab2:
         m3.metric("Win Rate (Efectividad)", f"{winrate:.1f}%")
 
         st.write("### Tabla de Registros")
-        st.dataframe(
-            df_sesiones[
-                [
-                    "fecha",
-                    "saldo_inicial",
-                    "meta_monto",
-                    "monto_operacion",
-                    "ganadas",
-                    "perdidas",
-                    "resultado_monto",
-                    "saldo_final",
-                ]
-            ],
-            use_container_width=True,
+        st.dataframe(df_sesiones, use_container_width=True)
+
+with tab3:
+    st.subheader(
+        f"📈 Proyección Teórica de Interés Compuesto ({cuenta_seleccionada})"
+    )
+    st.info(
+        f"Esta tabla muestra cómo crecería tu capital actual (**${saldo_actual:.2f}**) sesión a sesión si cumples de manera perfecta la meta del **{pct_meta}%** por sesión."
+    )
+
+    num_sesiones_proyeccion = st.slider(
+        "Número de sesiones a proyectar:", 10, 100, 30
+    )
+
+    # Calcular la proyección matemática
+    datos_proyeccion = []
+    capital_proyectado = saldo_actual
+    for i in range(1, num_sesiones_proyeccion + 1):
+        saldo_inicial_s = capital_proyectado
+        meta_s = saldo_inicial_s * (pct_meta / 100.0)
+        saldo_final_s = saldo_inicial_s + meta_s
+        datos_proyeccion.append(
+            {
+                "Sesión": f"Sesión {i}",
+                "Saldo Inicial ($)": round(saldo_inicial_s, 2),
+                "Meta Ganancia ($)": round(meta_s, 2),
+                "Saldo Final Esperado ($)": round(saldo_final_s, 2),
+            }
         )
+        capital_proyectado = saldo_final_s
+
+    df_proj = pd.DataFrame(datos_proyeccion)
+    st.dataframe(df_proj, use_container_width=True)
+
+with tab4:
+    st.subheader("⚙️ Eliminar Registro Erróneo")
+    st.warning(
+        "⚠️ Si te equivocaste en una sesión, puedes seleccionarla y eliminarla aquí."
+    )
+
+    df_sesiones_borrar = pd.read_sql_query(
+        f"SELECT id, fecha, saldo_inicial, resultado_monto, saldo_final FROM sesiones WHERE cuenta_id = {cuenta_id} ORDER BY id DESC",
+        conn,
+    )
+
+    if df_sesiones_borrar.empty:
+        st.info("No hay registros para eliminar en esta cuenta.")
+    else:
+        sesion_a_borrar = st.selectbox(
+            "Selecciona la sesión que deseas eliminar:",
+            df_sesiones_borrar.apply(
+                lambda row: f"ID: {row['id']} | Fecha: {row['fecha']} | Resultado: ${row['resultado_monto']}",
+                axis=1,
+            ),
+        )
+
+        if st.button("🗑️ Eliminar Sesión Seleccionada", type="primary"):
+            id_extraido = int(
+                sesion_a_borrar.split("|")[0].replace("ID:", "").strip()
+            )
+
+            c = conn.cursor()
+            c.execute("DELETE FROM sesiones WHERE id = ?", (id_extraido,))
+            conn.commit()
+            st.success(
+                f"¡Sesión ID {id_extraido} eliminada correctamente! Recuerda verificar tu saldo actual en la barra lateral."
+            )
+            st.rerun()
 
 conn.close()
