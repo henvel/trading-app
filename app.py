@@ -14,9 +14,14 @@ st.set_page_config(
 
 # --- CONEXIÓN A SUPABASE (POSTGRESQL) ---
 def get_connection():
-    # Lee la URL desde los secretos de Streamlit Cloud o usa una local si prefieres
-    db_url = st.secrets["postgres"]["url"]
-    conn = psycopg2.connect(db_url)
+    db_config = st.secrets["postgres"]
+    conn = psycopg2.connect(
+        user=db_config["user"],
+        password=db_config["password"],
+        host=db_config["host"],
+        port=db_config["port"],
+        dbname=db_config["dbname"],
+    )
     return conn
 
 
