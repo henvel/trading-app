@@ -1,8 +1,7 @@
 import datetime
-import os
+import sqlite3
 import pandas as pd
 import plotly.express as px
-import psycopg2
 import streamlit as st
 
 st.set_page_config(
@@ -12,28 +11,18 @@ st.set_page_config(
 )
 
 
-# --- CONEXIÓN A SUPABASE (POSTGRESQL) ---
 def get_connection():
-    db_config = st.secrets["postgres"]
-    conn = psycopg2.connect(
-        user=db_config["user"],
-        password=db_config["password"],
-        host=db_config["host"],
-        port=db_config["port"],
-        dbname=db_config["dbname"],
-    )
+    conn = sqlite3.connect("trading_journal.db", check_same_thread=False)
     return conn
 
 
 def init_db():
     conn = get_connection()
     c = conn.cursor()
-
-    # En PostgreSQL se usa SERIAL PRIMARY KEY
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS cuentas (
-            id SERIAL PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT UNIQUE,
             saldo_inicial REAL,
             saldo_actual REAL,
@@ -46,7 +35,7 @@ def init_db():
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS sesiones (
-            id SERIAL PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             cuenta_id INTEGER,
             fecha TEXT,
             saldo_inicial REAL,
@@ -62,24 +51,24 @@ def init_db():
         )
     """
     )
+    # Migraciones seguras
+    try:
+        c.execute("ALTER TABLE cuentas ADD COLUMN limite_ops INTEGER DEFAULT 3")
+    except sqlite3.OperationalError:
+        pass
 
-    # Migraciones seguras para PostgreSQL
     try:
         c.execute(
-            "ALTER TABLE cuentas ADD COLUMN IF NOT EXISTS limite_ops INTEGER DEFAULT 3"
+            "ALTER TABLE sesiones ADD COLUMN estado_disciplina TEXT DEFAULT 'Plan Respetado'"
         )
         c.execute(
-            "ALTER TABLE sesiones ADD COLUMN IF NOT EXISTS estado_disciplina TEXT DEFAULT 'Plan Respetado'"
+            "ALTER TABLE sesiones ADD COLUMN nota_emocional TEXT DEFAULT ''"
         )
-        c.execute(
-            "ALTER TABLE sesiones ADD COLUMN IF NOT EXISTS nota_emocional TEXT DEFAULT ''"
-        )
-    except Exception:
-        conn.rollback()
+    except sqlite3.OperationalError:
+        pass
 
-    # Cuenta por defecto si no existe ninguna
     c.execute(
-        "INSERT INTO cuentas (nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion, limite_ops) VALUES ('Cuenta Principal', 10.0, 10.0, 5.0, 3.0, 3) ON CONFLICT (nombre) DO NOTHING"
+        "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion, limite_ops) VALUES (1, 'Cuenta Principal', 10.0, 10.0, 5.0, 3.0, 3)"
     )
     conn.commit()
     conn.close()
@@ -91,7 +80,6 @@ st.title("📈 Bitácora de Trading - Opciones Binarias")
 
 conn = get_connection()
 df_cuentas = pd.read_sql_query("SELECT * FROM cuentas", conn)
-conn.close()
 
 # --- BARRA LATERAL: GESTIÓN DE CUENTAS ---
 st.sidebar.header("⚙️ Gestión de Cuentas")
@@ -125,12 +113,11 @@ with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
 
         if btn_crear_cuenta and nuevo_nombre:
             try:
-                conn = get_connection()
                 c = conn.cursor()
                 c.execute(
                     """
                     INSERT INTO cuentas (nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion, limite_ops)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """,
                     (
                         nuevo_nombre,
@@ -142,13 +129,10 @@ with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
                     ),
                 )
                 conn.commit()
-                conn.close()
                 st.success(f"¡Cuenta '{nuevo_nombre}' creada con éxito!")
                 st.rerun()
             except Exception as e:
-                st.error(
-                    "Ese nombre de cuenta ya existe o hubo un error de conexión."
-                )
+                st.error("Ese nombre de cuenta ya existe.")
 
 with st.sidebar.expander("✏️ Editar Cuenta Activa"):
     nuevo_nombre_cuenta = st.text_input(
@@ -172,13 +156,12 @@ with st.sidebar.expander("✏️ Editar Cuenta Activa"):
 
     if st.button("Guardar Cambios de Cuenta"):
         try:
-            conn = get_connection()
             c = conn.cursor()
             c.execute(
                 """
                 UPDATE cuentas 
-                SET nombre = %s, saldo_actual = %s, pct_meta = %s, pct_operacion = %s, limite_ops = %s
-                WHERE id = %s
+                SET nombre = ?, saldo_actual = ?, pct_meta = ?, pct_operacion = ?, limite_ops = ?
+                WHERE id = ?
             """,
                 (
                     nuevo_nombre_cuenta,
@@ -190,11 +173,41 @@ with st.sidebar.expander("✏️ Editar Cuenta Activa"):
                 ),
             )
             conn.commit()
-            conn.close()
             st.sidebar.success("¡Parámetros actualizados!")
             st.rerun()
         except Exception as e:
             st.sidebar.error("Ese nombre de cuenta ya está en uso.")
+
+# --- BARRA LATERAL: RESPALDO Y RESTAURACIÓN (BACKUP) ---
+st.sidebar.divider()
+st.sidebar.header("💾 Respaldo de Datos")
+
+with st.sidebar.expander("📂 Exportar / Importar Base de Datos"):
+    # Botón de Descarga (Backup)
+    try:
+        with open("trading_journal.db", "rb") as f:
+            db_bytes = f.read()
+        st.download_button(
+            label="📥 Descargar Copia (.db)",
+            data=db_bytes,
+            file_name="trading_journal_backup.db",
+            mime="application/octet-stream",
+            help="Descarga un archivo con todos tus registros actuales a tu computadora.",
+        )
+    except Exception as e:
+        st.write("Aún no hay datos para respaldar.")
+
+    # Botón de Subida (Restaurar)
+    archivo_subido = st.file_uploader(
+        "📤 Restaurar Copia (.db)",
+        type=["db"],
+        help="Sube aquí tu archivo de respaldo anterior para recuperar tus datos.",
+    )
+    if archivo_subido is not None:
+        with open("trading_journal.db", "wb") as f:
+            f.write(archivo_subido.getbuffer())
+        st.success("¡Base de datos restaurada con éxito!")
+        st.rerun()
 
 # --- CÁLCULO DE METAS ---
 ganancia_meta_dolares = saldo_actual * (pct_meta / 100.0)
@@ -269,13 +282,12 @@ with tab1:
             estado_disc = "⚠️ Sobreoperativa"
 
         nuevo_saldo_final = saldo_actual + resultado_neto
-        conn = get_connection()
         c = conn.cursor()
 
         c.execute(
             """
             INSERT INTO sesiones (cuenta_id, fecha, saldo_inicial, meta_monto, monto_operacion, ganadas, perdidas, resultado_monto, saldo_final, estado_disciplina, nota_emocional)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 cuenta_id,
@@ -293,12 +305,11 @@ with tab1:
         )
 
         c.execute(
-            "UPDATE cuentas SET saldo_actual = %s WHERE id = %s",
+            "UPDATE cuentas SET saldo_actual = ? WHERE id = ?",
             (nuevo_saldo_final, cuenta_id),
         )
 
         conn.commit()
-        conn.close()
         st.success(
             f"¡Sesión guardada! Estado: {estado_disc} | Nuevo saldo: ${nuevo_saldo_final:.2f}"
         )
@@ -307,12 +318,10 @@ with tab1:
 with tab2:
     st.subheader(f"Avance y Estadísticas de {cuenta_seleccionada}")
 
-    conn = get_connection()
     df_sesiones = pd.read_sql_query(
         f"SELECT * FROM sesiones WHERE cuenta_id = {cuenta_id} ORDER BY id ASC",
         conn,
     )
-    conn.close()
 
     if df_sesiones.empty:
         st.info("Aún no hay sesiones registradas para esta cuenta.")
@@ -390,12 +399,10 @@ with tab4:
     st.subheader("⚙️ Eliminar Registro Erróneo")
     st.warning("⚠️ Selecciona y elimina cualquier sesión ingresada por error.")
 
-    conn = get_connection()
     df_sesiones_borrar = pd.read_sql_query(
         f"SELECT id, fecha, saldo_inicial, resultado_monto, saldo_final FROM sesiones WHERE cuenta_id = {cuenta_id} ORDER BY id DESC",
         conn,
     )
-    conn.close()
 
     if df_sesiones_borrar.empty:
         st.info("No hay registros para eliminar en esta cuenta.")
@@ -413,12 +420,12 @@ with tab4:
                 sesion_a_borrar.split("|")[0].replace("ID:", "").strip()
             )
 
-            conn = get_connection()
             c = conn.cursor()
-            c.execute("DELETE FROM sesiones WHERE id = %s", (id_extraido,))
+            c.execute("DELETE FROM sesiones WHERE id = ?", (id_extraido,))
             conn.commit()
-            conn.close()
             st.success(
                 f"¡Sesión ID {id_extraido} eliminada correctamente! Recuerda verificar tu saldo actual en la barra lateral."
             )
             st.rerun()
+
+conn.close()
