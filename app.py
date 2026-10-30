@@ -51,7 +51,7 @@ def init_db():
         )
     """
     )
-    # Migraciones seguras por si la tabla ya existía
+    # Migraciones seguras
     try:
         c.execute("ALTER TABLE cuentas ADD COLUMN limite_ops INTEGER DEFAULT 3")
     except sqlite3.OperationalError:
@@ -67,7 +67,6 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
-    # Dejar solo una cuenta por defecto con límite de 3 operaciones
     c.execute(
         "INSERT OR IGNORE INTO cuentas (id, nombre, saldo_inicial, saldo_actual, pct_meta, pct_operacion, limite_ops) VALUES (1, 'Cuenta Principal', 10.0, 10.0, 5.0, 3.0, 3)"
     )
@@ -136,6 +135,9 @@ with st.sidebar.expander("➕ Agregar Nueva Cuenta"):
                 st.error("Ese nombre de cuenta ya existe.")
 
 with st.sidebar.expander("✏️ Editar Cuenta Activa"):
+    nuevo_nombre_cuenta = st.text_input(
+        "Renombrar Cuenta", value=cuenta_seleccionada
+    )
     nuevo_saldo = st.number_input(
         "Ajustar Saldo Actual ($)", value=saldo_actual, step=1.0
     )
@@ -153,23 +155,58 @@ with st.sidebar.expander("✏️ Editar Cuenta Activa"):
     )
 
     if st.button("Guardar Cambios de Cuenta"):
-        c = conn.cursor()
-        c.execute(
-            """
-            UPDATE cuentas 
-            SET saldo_actual = ?, pct_meta = ?, pct_operacion = ?, limite_ops = ?
-            WHERE id = ?
-        """,
-            (
-                nuevo_saldo,
-                nuevo_pct_meta,
-                nuevo_pct_op,
-                nuevo_limite_ops,
-                cuenta_id,
-            ),
+        try:
+            c = conn.cursor()
+            c.execute(
+                """
+                UPDATE cuentas 
+                SET nombre = ?, saldo_actual = ?, pct_meta = ?, pct_operacion = ?, limite_ops = ?
+                WHERE id = ?
+            """,
+                (
+                    nuevo_nombre_cuenta,
+                    nuevo_saldo,
+                    nuevo_pct_meta,
+                    nuevo_pct_op,
+                    nuevo_limite_ops,
+                    cuenta_id,
+                ),
+            )
+            conn.commit()
+            st.sidebar.success("¡Parámetros actualizados!")
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error("Ese nombre de cuenta ya está en uso.")
+
+# --- BARRA LATERAL: RESPALDO Y RESTAURACIÓN (BACKUP) ---
+st.sidebar.divider()
+st.sidebar.header("💾 Respaldo de Datos")
+
+with st.sidebar.expander("📂 Exportar / Importar Base de Datos"):
+    # Botón de Descarga (Backup)
+    try:
+        with open("trading_journal.db", "rb") as f:
+            db_bytes = f.read()
+        st.download_button(
+            label="📥 Descargar Copia (.db)",
+            data=db_bytes,
+            file_name="trading_journal_backup.db",
+            mime="application/octet-stream",
+            help="Descarga un archivo con todos tus registros actuales a tu computadora.",
         )
-        conn.commit()
-        st.sidebar.success("¡Parámetros actualizados!")
+    except Exception as e:
+        st.write("Aún no hay datos para respaldar.")
+
+    # Botón de Subida (Restaurar)
+    archivo_subido = st.file_uploader(
+        "📤 Restaurar Copia (.db)",
+        type=["db"],
+        help="Sube aquí tu archivo de respaldo anterior para recuperar tus datos.",
+    )
+    if archivo_subido is not None:
+        with open("trading_journal.db", "wb") as f:
+            f.write(archivo_subido.getbuffer())
+        st.success("¡Base de datos restaurada con éxito!")
         st.rerun()
 
 # --- CÁLCULO DE METAS ---
@@ -177,7 +214,6 @@ ganancia_meta_dolares = saldo_actual * (pct_meta / 100.0)
 saldo_meta_total = saldo_actual + ganancia_meta_dolares
 monto_por_op = saldo_actual * (pct_operacion / 100.0)
 
-# Resaltar visualmente el nombre de la cuenta activa en la cabecera
 st.markdown(
     f"### 📊 Panel Activo: <span style='color:#FF4B4B;'>{cuenta_seleccionada}</span>",
     unsafe_allow_html=True,
